@@ -1,0 +1,23 @@
+[
+  {
+    "site": "barbora",
+    "query": "pienas 1L",
+    "qty": 1
+  },
+  {
+    "site": "barbora",
+    "query": "duona juoda",
+    "qty": 1
+  },
+  {
+    "site": "rimi",
+    "query": "bananai 1kg",
+    "qty": 2
+  },
+  {
+    "site": "rimi",
+    "query": "kiausiniai 10 vnt",
+    "qty": 1
+  }
+]
+
