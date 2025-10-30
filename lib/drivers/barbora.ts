@@ -12,6 +12,7 @@ import { pickBestWithAI } from "../utils/ai";
 import { LogSink } from "../utils/log";
 import { parseGroceryQuery, scoreProduct, canFulfillQuantity } from "../utils/query-parser";
 import { selectProductWithAgent } from "../agents/product-selector";
+import { AddResult } from "../runner";
 
 const BASE_URL = "https://www.barbora.lt";
 
@@ -93,7 +94,7 @@ export async function addByUrl(
   url: string,
   qty: number,
   log: LogSink
-): Promise<void> {
+): Promise<AddResult> {
   try {
     log.info(`[barbora] Adding product from URL: ${url}`);
     
@@ -102,20 +103,40 @@ export async function addByUrl(
     );
     await page.waitForTimeout(2000);
     
-    // Take screenshot for debugging
-    const screenshotPath = `./debug-barbora-${Date.now()}.png`;
-    await page.screenshot({ path: screenshotPath, fullPage: false });
-    log.info(`[barbora] Screenshot saved: ${screenshotPath}`);
+    // Try to get product name from the page
+    let productName = url;  // Default to URL
+    try {
+      const titleSelectors = [
+        'h1',
+        '[class*="product-title"]',
+        '[class*="product-name"]',
+        'span[id*="product-title"]',
+      ];
+      for (const selector of titleSelectors) {
+        const titleEl = page.locator(selector).first();
+        if (await titleEl.count() > 0) {
+          const text = await titleEl.textContent();
+          if (text && text.trim()) {
+            productName = text.trim();
+            break;
+          }
+        }
+      }
+    } catch {
+      // If we can't get the name, just use the URL
+    }
     
     // Try multiple strategies to find and click add to cart
     let added = false;
     
     // Strategy 1: Look for specific Barbora button classes
     const barboraSelectors = [
+      'button[data-cnstrc-btn="add_to_cart"]',  // Most reliable - excludes wishlist button!
       'button[class*="b-product-action-add"]',
       'button[class*="product-add"]',
-      'button[class*="add-to-cart"]',
+      'button[class*="add-to-cart"]:not([data-cnstrc-btn="add_to_wishlist"])',
       'button[data-testid="add-to-cart"]',
+      'button:has-text("Add to cart")',
       'button:has-text("Į krepšelį")',
       'button:has-text("Pridėti į krepšelį")',
     ];
@@ -140,6 +161,28 @@ export async function addByUrl(
     }
     
     if (!added) {
+      // Check if product is unavailable/out of stock
+      const unavailableSelectors = [
+        'button:has-text("Sorry, this product is currently unavailable")',
+        'button:has-text("unavailable")',
+        'div:has-text("Out of stock")',
+        'div:has-text("Nėra sandėlyje")',
+        '[class*="unavailable"]',
+      ];
+      
+      let isUnavailable = false;
+      for (const selector of unavailableSelectors) {
+        if (await page.locator(selector).count() > 0) {
+          isUnavailable = true;
+          break;
+        }
+      }
+      
+      if (isUnavailable) {
+        log.warn(`[barbora] ⚠️  Product is OUT OF STOCK: ${url}`);
+        throw new Error(`OUT_OF_STOCK: ${url}`);
+      }
+      
       // Log all buttons on the page for debugging
       const buttons = await page.locator('button').all();
       log.warn(`[barbora] Found ${buttons.length} buttons on page`);
@@ -148,7 +191,7 @@ export async function addByUrl(
         log.info(`[barbora] Button ${i}: "${text?.trim()}"`);
       }
       log.warn(`[barbora] Could not find add-to-cart button for ${url}`);
-      return;
+      throw new Error(`Could not find add-to-cart button for ${url}`);
     }
     
     log.info(`[barbora] ✓ Added 1 item to cart`);
@@ -165,8 +208,14 @@ export async function addByUrl(
     }
     
     await page.waitForTimeout(1000);
+    
+    return {
+      productName,
+      quantityAdded: qty
+    };
   } catch (error) {
     log.error(`[barbora] Error adding product from URL: ${error}`);
+    throw error; // Re-throw so caller knows it failed
   }
 }
 
@@ -176,7 +225,7 @@ export async function addByQuery(
   qty: number,
   options: { useOpenAI?: boolean },
   log: LogSink
-): Promise<void> {
+): Promise<AddResult> {
   try {
     log.info(`[barbora] Searching for: "${query}"`);
     
@@ -185,11 +234,6 @@ export async function addByQuery(
       page.goto(BASE_URL, { waitUntil: "domcontentloaded" })
     );
     await page.waitForTimeout(2000);
-    
-    // Take screenshot for debugging
-    const screenshotPath = `./debug-barbora-search-${Date.now()}.png`;
-    await page.screenshot({ path: screenshotPath, fullPage: false });
-    log.info(`[barbora] Screenshot saved: ${screenshotPath}`);
     
     // Find search input with more variations
     const searchSelectors = [
@@ -238,7 +282,7 @@ export async function addByQuery(
         log.info(`[barbora] Input ${i}: type="${type}", placeholder="${placeholder}", name="${name}"`);
       }
       log.error(`[barbora] Could not find search input`);
-      return;
+      throw new Error('Could not find search input');
     }
     
     // Parse query intelligently if OpenAI is available
@@ -296,8 +340,8 @@ export async function addByQuery(
     }
     
     if (products.length === 0) {
-      log.warn(`[barbora] No products found for query: "${query}" after trying all variations`);
-      return;
+      log.error(`[barbora] ❌ No products found for query: "${query}" after trying all variations`);
+      throw new Error(`NOT_FOUND: No products found for "${query}"`);
     }
     
     // Use LLM Agent for intelligent product selection
@@ -313,19 +357,9 @@ export async function addByQuery(
         bestIndex = agentResult.selectedIndex;
         actualQty = agentResult.quantity;
       } else {
-        log.warn(`[barbora] Agent failed, falling back to string similarity...`);
-        // Fallback to simple string matching
-        let bestScore = 0;
-        for (let i = 0; i < products.length; i++) {
-          const score = compareTwoStrings(
-            query.toLowerCase(),
-            products[i].title.toLowerCase()
-          );
-          if (score > bestScore) {
-            bestScore = score;
-            bestIndex = i;
-          }
-        }
+        // Agent couldn't find a suitable product - don't fall back, throw error
+        log.error(`[barbora] ❌ AI Agent could not find a suitable match for "${query}"`);
+        throw new Error(`NOT_FOUND: No suitable product found for "${query}"`);
       }
     } else {
       // Use string similarity only (no AI)
@@ -346,6 +380,12 @@ export async function addByQuery(
     
     const selected = products[bestIndex];
     log.info(`[barbora] 🎯 About to add: "${selected.title}"`);
+    
+    // Check if product is available
+    if (selected.isAvailable === false) {
+      log.warn(`[barbora] ⚠️  Product "${selected.title}" is OUT OF STOCK or unavailable`);
+      throw new Error(`OUT_OF_STOCK: ${selected.title}`);
+    }
     
     // Add to cart - ONLY this specific product
     await selected.clickAdd();
@@ -416,9 +456,13 @@ export async function addByQuery(
     log.info(`[barbora] ✅ Finished adding "${query}"`);
     
     // IMPORTANT: Return immediately to prevent any further clicks
-    return;
+    return {
+      productName: selected.title,
+      quantityAdded: actualQty
+    };
   } catch (error) {
     log.error(`[barbora] Error searching for "${query}": ${error}`);
+    throw error; // Re-throw so caller knows it failed
   }
 }
 

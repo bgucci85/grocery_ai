@@ -94,9 +94,11 @@ export async function clickAddToCart(
   
   // Try common selectors as fallback
   const fallbackSelectors = [
-    'button[class*="add"]',
-    'button[class*="cart"]',
-    'button[data-testid*="add"]',
+    'button[data-cnstrc-btn="add_to_cart"]',  // Barbora specific - most reliable!
+    'button[data-testid*="add-to-cart"]',
+    'button[class*="add-to-cart"]:not([data-cnstrc-btn="add_to_wishlist"])',
+    'button[class*="add"]:not([aria-label*="Save"]):not([data-cnstrc-btn="add_to_wishlist"])',
+    'button[class*="cart"]:not([aria-label*="Save"])',
     '.add-to-cart',
     '.btn-add-to-cart'
   ];
@@ -122,6 +124,7 @@ export interface ProductCard {
   price?: string;
   element: Locator;
   clickAdd: () => Promise<void>;
+  isAvailable?: boolean;  // Whether the product can be added to cart
 }
 
 /**
@@ -176,10 +179,12 @@ export async function collectGridProducts(page: Page, log?: any): Promise<Produc
     }
     
     const addButtonSelectors = [
+      'button[data-cnstrc-btn="add_to_cart"]',  // Barbora specific - most reliable!
+      'button:has-text("Add to cart")',
       'button:has-text("Į krepšelį")',
       'button:has-text("Pridėti")',
-      'button:has-text("Add to cart")',
-      'button[class*="add"]',
+      'button[class*="add-to-cart"]:not([data-cnstrc-btn="add_to_wishlist"])',
+      'button[class*="add"]:not([aria-label*="Save"]):not([data-cnstrc-btn="add_to_wishlist"])',
     ];
     
     let addButtons: Locator | null = null;
@@ -265,6 +270,9 @@ export async function collectGridProducts(page: Page, log?: any): Promise<Produc
           await page.waitForTimeout(500);
         };
         
+        // Check if product is available (has add to cart button)
+        const isAvailable = await button.isVisible().catch(() => false);
+        
         // Check for duplicates
         const isDuplicate = products.some(p => p.title === title.trim());
         if (!isDuplicate) {
@@ -272,7 +280,8 @@ export async function collectGridProducts(page: Page, log?: any): Promise<Produc
             title: title.trim(),
             price: price.trim(),
             element: productContainer,
-            clickAdd
+            clickAdd,
+            isAvailable
           });
         }
       } catch (error) {
@@ -335,9 +344,36 @@ export async function collectGridProducts(page: Page, log?: any): Promise<Produc
         }
       }
       
+      // Check if product has "Add to cart" button (is available)
+      let isAvailable = false;
+      let addButton: Locator | null = null;
+      
+      const addToCartSelectors = [
+        'button[data-cnstrc-btn="add_to_cart"]',
+        'button:has-text("Add to cart")',
+        'button:has-text("Į krepšelį")',
+        'button:has-text("Pridėti")',
+      ];
+      
+      for (const selector of addToCartSelectors) {
+        const btn = card.locator(selector).first();
+        if (await btn.count() > 0 && await btn.isVisible().catch(() => false)) {
+          isAvailable = true;
+          addButton = btn;
+          break;
+        }
+      }
+      
       // Create click function
       const clickAdd = async () => {
-        const buttonTexts = ["Į krepšelį", "Pridėti", "Add"];
+        if (addButton) {
+          await addButton.click();
+          await page.waitForTimeout(500);
+          return;
+        }
+        
+        // Fallback: try to find button again
+        const buttonTexts = ["Add to cart", "Į krepšelį", "Pridėti"];
         for (const text of buttonTexts) {
           const button = card.getByRole("button", { name: new RegExp(text, "i") });
           if (await button.count() > 0) {
@@ -345,13 +381,6 @@ export async function collectGridProducts(page: Page, log?: any): Promise<Produc
             await page.waitForTimeout(500);
             return;
           }
-        }
-        
-        // Fallback: try any button in the card
-        const anyButton = card.locator('button').first();
-        if (await anyButton.count() > 0) {
-          await anyButton.click();
-          await page.waitForTimeout(500);
         }
       };
       
@@ -365,7 +394,8 @@ export async function collectGridProducts(page: Page, log?: any): Promise<Produc
         title: title.trim(),
         price: price.trim(),
         element: card,
-        clickAdd
+        clickAdd,
+        isAvailable
       });
     } catch (error) {
       // Skip problematic cards
@@ -568,8 +598,8 @@ export async function adjustVariableWeight(
       log.info(`Adjusted to ${currentWeight}kg (target: ${targetKg}kg)`);
     }
     
-    // Check if we're close enough (within 15% tolerance)
-    if (currentWeight >= targetKg * 0.85 && currentWeight <= targetKg * 1.15) {
+    // Check if we're close enough (within 5% tolerance)
+    if (currentWeight >= targetKg * 0.95 && currentWeight <= targetKg * 1.05) {
       if (log) log.info(`✓ Reached ${currentWeight}kg (close enough to ${targetKg}kg)`);
       return true;
     }

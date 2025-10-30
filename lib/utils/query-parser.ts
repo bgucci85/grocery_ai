@@ -180,9 +180,9 @@ export function canFulfillQuantity(productTitle: string, desiredQuantity: string
     return true; // Can buy multiple units
   }
   
-  // Check if they're close enough (within 20%)
+  // Check if they're close enough (within 10%)
   const ratio = desiredAmount / productAmount;
-  if (ratio >= 0.8 && ratio <= 1.2) {
+  if (ratio >= 0.9 && ratio <= 1.1) {
     return true;
   }
   

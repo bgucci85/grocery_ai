@@ -4,6 +4,7 @@ import * as fs from "fs";
 import { LogSink } from "./utils/log";
 import * as barbora from "./drivers/barbora";
 import * as rimi from "./drivers/rimi";
+import { judgeCart, displayJudgment } from "./utils/cart-judge";
 
 export type Site = "barbora" | "rimi";
 
@@ -21,16 +22,37 @@ export interface RunOptions {
   useOpenAI?: boolean;
 }
 
+export interface FailedItem {
+  query?: string;
+  url?: string;
+  reason: 'out_of_stock' | 'not_found' | 'error';
+  details?: string;
+  site: Site;
+}
+
+export interface AddedItem {
+  originalRequest: string;  // What the user asked for
+  productAdded: string;      // What was actually added to cart
+  quantityRequested: number; // Quantity requested
+  quantityAdded: number;     // Quantity added
+  site: Site;
+}
+
+export interface AddResult {
+  productName: string;
+  quantityAdded: number;
+}
+
 interface SiteDriver {
   ensureLoggedIn: (page: any, log: LogSink) => Promise<void>;
-  addByUrl: (page: any, url: string, qty: number, log: LogSink) => Promise<void>;
+  addByUrl: (page: any, url: string, qty: number, log: LogSink) => Promise<AddResult>;
   addByQuery: (
     page: any,
     query: string,
     qty: number,
     options: { useOpenAI?: boolean },
     log: LogSink
-  ) => Promise<void>;
+  ) => Promise<AddResult>;
 }
 
 const DRIVERS: Record<Site, SiteDriver> = {
@@ -71,15 +93,60 @@ export async function runJob(options: RunOptions, log: LogSink): Promise<void> {
 
   log.info(`Processing ${options.items.length} items across ${itemsBySite.size} site(s)`);
 
+  // Track failed and added items across all sites
+  const allFailedItems: FailedItem[] = [];
+  const allAddedItems: AddedItem[] = [];
+
   // Process each site
-  for (const [site, items] of itemsBySite.entries()) {
-    await processSite(site, items, options, log);
+  for (const [site, items] of Array.from(itemsBySite.entries())) {
+    const { failedItems, addedItems } = await processSite(site, items, options, log);
+    allFailedItems.push(...failedItems);
+    allAddedItems.push(...addedItems);
+  }
+
+  // Report summary
+  if (allFailedItems.length > 0) {
+    log.warn(`\n⚠️  ${allFailedItems.length} item(s) could not be added:\n`);
+    
+    const outOfStock = allFailedItems.filter(i => i.reason === 'out_of_stock');
+    const notFound = allFailedItems.filter(i => i.reason === 'not_found');
+    const errors = allFailedItems.filter(i => i.reason === 'error');
+    
+    if (outOfStock.length > 0) {
+      log.warn(`\n📦 OUT OF STOCK (${outOfStock.length}):`);
+      outOfStock.forEach(item => {
+        const identifier = item.query || item.url || 'Unknown';
+        log.warn(`   • ${identifier} (${item.site})`);
+      });
+    }
+    
+    if (notFound.length > 0) {
+      log.warn(`\n🔍 NOT FOUND (${notFound.length}):`);
+      notFound.forEach(item => {
+        const identifier = item.query || item.url || 'Unknown';
+        log.warn(`   • ${identifier} (${item.site})`);
+      });
+    }
+    
+    if (errors.length > 0) {
+      log.warn(`\n❌ ERRORS (${errors.length}):`);
+      errors.forEach(item => {
+        const identifier = item.query || item.url || 'Unknown';
+        log.warn(`   • ${identifier} (${item.site}): ${item.details}`);
+      });
+    }
+  }
+
+  // Run cart verification if OpenAI is enabled
+  if (options.useOpenAI && process.env.OPENAI_API_KEY) {
+    const judgments = await judgeCart(options.items, allAddedItems, allFailedItems, log);
+    displayJudgment(judgments, log);
   }
 
   if (options.headful) {
-    log.done("✅ Ready for checkout! Browser windows left open for you to review.");
+    log.done("\n✅ Ready for checkout! Browser windows left open for you to review.");
   } else {
-    log.done("✅ Ready for checkout");
+    log.done("\n✅ Ready for checkout");
   }
 }
 
@@ -91,8 +158,10 @@ async function processSite(
   items: CartItem[],
   options: RunOptions,
   log: LogSink
-): Promise<void> {
+): Promise<{ failedItems: FailedItem[]; addedItems: AddedItem[] }> {
   let context: BrowserContext | null = null;
+  const failedItems: FailedItem[] = [];
+  const addedItems: AddedItem[] = [];
 
   try {
     log.info(`\n📦 Processing ${items.length} item(s) for ${site}...`);
@@ -130,19 +199,21 @@ async function processSite(
         log.info(`📋 Found ${item.alternatives.length} alternatives (using "arba"), will try in order with qty=${qty}...`);
         
         let success = false;
+        let lastError: any = null;
+        
         for (let altIndex = 0; altIndex < item.alternatives.length; altIndex++) {
           const alt = item.alternatives[altIndex];
           const preview = alt.type === 'url' ? alt.value.substring(0, 60) + '...' : alt.value;
           log.info(`🔄 Trying alternative ${altIndex + 1}/${item.alternatives.length}: ${preview}`);
           
           try {
+            let result: AddResult | undefined = undefined;
             if (alt.type === "url") {
-              await driver.addByUrl(page, alt.value, qty, log);
+              result = await driver.addByUrl(page, alt.value, qty, log);
               success = true;
               log.info(`✅ Successfully added alternative ${altIndex + 1}!`);
-              break; // Stop trying alternatives once one succeeds
             } else {
-              await driver.addByQuery(
+              result = await driver.addByQuery(
                 page,
                 alt.value,
                 qty,
@@ -151,9 +222,22 @@ async function processSite(
               );
               success = true;
               log.info(`✅ Successfully added alternative ${altIndex + 1}!`);
-              break; // Stop trying alternatives once one succeeds
             }
+            
+            // Track successful addition
+            if (result) {
+              const firstAlt = item.alternatives![0];
+              addedItems.push({
+                originalRequest: firstAlt.type === 'query' ? firstAlt.value : firstAlt.value,
+                productAdded: result.productName,
+                quantityRequested: qty,
+                quantityAdded: result.quantityAdded,
+                site
+              });
+            }
+            break; // Stop trying alternatives once one succeeds
           } catch (error) {
+            lastError = error;
             log.warn(`⚠️  Alternative ${altIndex + 1} failed: ${error}`);
             if (altIndex < item.alternatives.length - 1) {
               log.info(`⏭️  Trying next alternative...`);
@@ -163,19 +247,56 @@ async function processSite(
         
         if (!success) {
           log.error(`❌ All ${item.alternatives.length} alternatives failed`);
+          // Record the failure with the first alternative's identifier
+          const firstAlt = item.alternatives[0];
+          const errorStr = String(lastError || '');
+          const errorLower = errorStr.toLowerCase();
+          failedItems.push({
+            query: firstAlt.type === 'query' ? firstAlt.value : undefined,
+            url: firstAlt.type === 'url' ? firstAlt.value : undefined,
+            reason: errorLower.includes('out_of_stock') ? 'out_of_stock' : 
+                    errorLower.includes('not_found') || errorLower.includes('not found') ? 'not_found' : 'error',
+            details: errorStr,
+            site
+          });
         }
       } else {
         // Single item (no alternatives)
-        if (item.url) {
-          await driver.addByUrl(page, item.url, qty, log);
-        } else if (item.query) {
-          await driver.addByQuery(
-            page,
-            item.query,
-            qty,
-            { useOpenAI: options.useOpenAI },
-            log
-          );
+        try {
+          let result: AddResult | undefined = undefined;
+          if (item.url) {
+            result = await driver.addByUrl(page, item.url, qty, log);
+          } else if (item.query) {
+            result = await driver.addByQuery(
+              page,
+              item.query,
+              qty,
+              { useOpenAI: options.useOpenAI },
+              log
+            );
+          }
+          
+          // Track successful addition
+          if (result) {
+            addedItems.push({
+              originalRequest: item.query || item.url || 'Unknown',
+              productAdded: result.productName,
+              quantityRequested: qty,
+              quantityAdded: result.quantityAdded,
+              site
+            });
+          }
+        } catch (error) {
+          const errorStr = String(error || '');
+          const errorLower = errorStr.toLowerCase();
+          failedItems.push({
+            query: item.query,
+            url: item.url,
+            reason: errorLower.includes('out_of_stock') ? 'out_of_stock' : 
+                    errorLower.includes('not_found') || errorLower.includes('not found') ? 'not_found' : 'error',
+            details: errorStr,
+            site
+          });
         }
       }
 
@@ -217,5 +338,7 @@ async function processSite(
       await context.close();
     }
   }
+  
+  return { failedItems, addedItems };
 }
 
