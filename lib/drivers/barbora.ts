@@ -196,34 +196,35 @@ export async function addByUrl(
     
     log.info(`[barbora] ✓ Added 1 item to cart`);
     
-    // Handle quantity > 1
+    // Handle quantity adjustment
     let finalQuantity = qty;
-    if (qty > 1) {
-      // Check if this is a weighted item
-      const isWeightedItem = productName.toLowerCase().includes('kg');
+    
+    // Check if this is a weighted item
+    const isWeightedItem = productName.toLowerCase().includes('kg');
+    
+    if (isWeightedItem) {
+      // For weighted items, always adjust weight (even for fractional quantities like 0.5kg)
+      log.info(`[barbora] Detected weighted item, adjusting to ${qty}kg...`);
+      const result = await adjustVariableWeight(page, qty, log);
       
-      if (isWeightedItem) {
-        log.info(`[barbora] Detected weighted item, adjusting to ${qty}kg...`);
-        const result = await adjustVariableWeight(page, qty, log);
-        
-        // Use actual weight achieved for reporting
-        finalQuantity = result.actualWeight;
-        
-        if (!result.success) {
-          // Weight adjustment didn't reach target, but item is still in cart
-          const percentage = Math.round((result.actualWeight / result.targetWeight) * 100);
-          log.warn(`[barbora] ⚠️  Weight mismatch: requested ${result.targetWeight}kg, got ${result.actualWeight}kg (${percentage}% of target)`);
-        } else {
-          log.info(`[barbora] ✓ Successfully adjusted to ${finalQuantity}kg (target: ${qty}kg)`);
-        }
+      // Use actual weight achieved for reporting
+      finalQuantity = result.actualWeight;
+      
+      if (!result.success) {
+        // Weight adjustment didn't reach target, but item is still in cart
+        const percentage = Math.round((result.actualWeight / result.targetWeight) * 100);
+        log.warn(`[barbora] ⚠️  Weight mismatch: requested ${result.targetWeight}kg, got ${result.actualWeight}kg (${percentage}% of target)`);
       } else {
-        log.info(`[barbora] Setting quantity to ${qty} units...`);
-        const incremented = await incrementQuantity(page, qty);
-        if (incremented) {
-          log.info(`[barbora] ✓ Set quantity to ${qty}`);
-        } else {
-          log.warn(`[barbora] Could not set quantity; may have only 1`);
-        }
+        log.info(`[barbora] ✓ Successfully adjusted to ${finalQuantity}kg (target: ${qty}kg)`);
+      }
+    } else if (qty > 1) {
+      // For discrete items, only adjust quantity if > 1
+      log.info(`[barbora] Setting quantity to ${qty} units...`);
+      const incremented = await incrementQuantity(page, qty);
+      if (incremented) {
+        log.info(`[barbora] ✓ Set quantity to ${qty}`);
+      } else {
+        log.warn(`[barbora] Could not set quantity; may have only 1`);
       }
     }
     
@@ -414,34 +415,35 @@ export async function addByQuery(
     
     // Handle quantity/weight adjustment
     let finalQuantity = actualQty;
-    if (actualQty > 1) {
-      // Check if this is a weighted item (contains "kg" in query or title)
-      const isWeightedItem = 
-        query.toLowerCase().includes('kg') || 
-        selected.title.toLowerCase().includes('kg');
+    
+    // Check if this is a weighted item (contains "kg" in query or title)
+    const isWeightedItem = 
+      query.toLowerCase().includes('kg') || 
+      selected.title.toLowerCase().includes('kg');
+    
+    if (isWeightedItem) {
+      // For weighted items, always adjust weight (even for fractional quantities like 0.5kg)
+      log.info(`[barbora] Detected weighted item, adjusting to ${actualQty}kg...`);
+      const result = await adjustVariableWeight(page, actualQty, log);
       
-      if (isWeightedItem) {
-        log.info(`[barbora] Detected weighted item, adjusting to ${actualQty}kg...`);
-        const result = await adjustVariableWeight(page, actualQty, log);
-        
-        // Use actual weight achieved for reporting
-        finalQuantity = result.actualWeight;
-        
-        if (!result.success) {
-          // Weight adjustment didn't reach target, but item is still in cart
-          const percentage = Math.round((result.actualWeight / result.targetWeight) * 100);
-          log.warn(`[barbora] ⚠️  Weight mismatch: requested ${result.targetWeight}kg, got ${result.actualWeight}kg (${percentage}% of target)`);
-        } else {
-          log.info(`[barbora] ✓ Successfully adjusted to ${finalQuantity}kg (target: ${actualQty}kg)`);
-        }
+      // Use actual weight achieved for reporting
+      finalQuantity = result.actualWeight;
+      
+      if (!result.success) {
+        // Weight adjustment didn't reach target, but item is still in cart
+        const percentage = Math.round((result.actualWeight / result.targetWeight) * 100);
+        log.warn(`[barbora] ⚠️  Weight mismatch: requested ${result.targetWeight}kg, got ${result.actualWeight}kg (${percentage}% of target)`);
       } else {
-        log.info(`[barbora] Setting quantity to ${actualQty} units...`);
-        const incremented = await incrementQuantity(page, actualQty);
-        if (incremented) {
-          log.info(`[barbora] ✓ Set quantity to ${actualQty}`);
-        } else {
-          log.warn(`[barbora] Could not set quantity; may have only 1`);
-        }
+        log.info(`[barbora] ✓ Successfully adjusted to ${finalQuantity}kg (target: ${actualQty}kg)`);
+      }
+    } else if (actualQty > 1) {
+      // For discrete items, only adjust quantity if > 1
+      log.info(`[barbora] Setting quantity to ${actualQty} units...`);
+      const incremented = await incrementQuantity(page, actualQty);
+      if (incremented) {
+        log.info(`[barbora] ✓ Set quantity to ${actualQty}`);
+      } else {
+        log.warn(`[barbora] Could not set quantity; may have only 1`);
       }
     }
     
