@@ -87,12 +87,12 @@ Return your analysis as a JSON object with an "items" array:
 }
 
 Guidelines:
-- matchScore should be 95-100 for exact matches
-- matchScore should be 70-94 for acceptable but not perfect matches (e.g., different brand, minor qty difference)
+- matchScore should be 95-100 for exact or near-perfect matches
+- matchScore should be 70-94 for acceptable matches with minor differences (e.g., different brand, minor qty difference like 7kg vs 8kg)
 - matchScore should be 50-69 for questionable matches (wrong size, significant qty mismatch like 0.25kg vs 0.5kg)
 - matchScore should be 0-49 for poor matches or failures
-- Status "success" = matchScore >= 70 and no major issues
-- Status "warning" = matchScore 50-69 or quantity issues (e.g., requested 0.5kg got 0.25kg)
+- Status "success" = matchScore >= 95 (only near-perfect matches)
+- Status "warning" = matchScore 50-94 (acceptable but not perfect, includes any quantity mismatches)
 - Status "failed" = item not added or matchScore < 50
 - ALWAYS note when reported quantity differs from actual cart quantity!`;
 
