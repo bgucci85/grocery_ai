@@ -154,15 +154,31 @@ Now analyze the products above and respond with JSON only.`;
       return null;
     }
 
+    const selectedProduct = products[result.selectedIndex];
+    const isWeightedItem = selectedProduct.title.toLowerCase().includes('kg');
+
     // Validate quantity
     if (result.quantity < 1) {
-      log.warn(`[Agent] Invalid quantity ${result.quantity}, setting to 1`);
-      result.quantity = 1;
+      // For weighted items (sold by kg), fractional quantities are valid (e.g., 0.5kg)
+      // For discrete items, quantity must be at least 1
+      if (isWeightedItem) {
+        // Allow fractional quantities for weighted items, but must be > 0
+        if (result.quantity <= 0) {
+          log.warn(`[Agent] Invalid quantity ${result.quantity} for weighted item, setting to 0.5kg`);
+          result.quantity = 0.5;
+        } else {
+          log.info(`[Agent] Fractional quantity ${result.quantity}kg is valid for weighted item`);
+        }
+      } else {
+        // Discrete items must have quantity >= 1
+        log.warn(`[Agent] Invalid quantity ${result.quantity} for discrete item, setting to 1`);
+        result.quantity = 1;
+      }
     }
 
     // Log agent's decision
-    log.info(`[Agent] ✓ Selected: "${products[result.selectedIndex].title}"`);
-    log.info(`[Agent] Quantity: ${result.quantity} unit(s)`);
+    log.info(`[Agent] ✓ Selected: "${selectedProduct.title}"`);
+    log.info(`[Agent] Quantity: ${result.quantity} ${isWeightedItem ? 'kg' : 'unit(s)'}`);
     log.info(`[Agent] Reasoning: ${result.reasoning}`);
     log.info(`[Agent] Confidence: ${(result.confidence * 100).toFixed(0)}%`);
 
