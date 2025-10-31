@@ -503,12 +503,20 @@ export async function incrementQuantity(
  * Handle variable weight items (like produce on Barbora)
  * Clicks + until reaching target weight (with tolerance)
  */
+export interface WeightAdjustmentResult {
+  success: boolean;
+  actualWeight: number;
+  targetWeight: number;
+}
+
 export async function adjustVariableWeight(
   page: Page,
   targetKg: number,
   log?: any
-): Promise<boolean> {
-  if (targetKg <= 0) return true;
+): Promise<WeightAdjustmentResult> {
+  if (targetKg <= 0) {
+    return { success: true, actualWeight: targetKg, targetWeight: targetKg };
+  }
 
   // Wait for weight selector to appear (modal or expanded section)
   await page.waitForTimeout(1000);
@@ -542,7 +550,7 @@ export async function adjustVariableWeight(
 
   if (!incrementButton) {
     if (log) log.warn("Could not find weight increment button");
-    return false;
+    return { success: false, actualWeight: 0, targetWeight: targetKg };
   }
 
   // Get current weight
@@ -572,7 +580,7 @@ export async function adjustVariableWeight(
 
   if (currentWeight === 0) {
     if (log) log.warn("Could not detect current weight");
-    return false;
+    return { success: false, actualWeight: 0, targetWeight: targetKg };
   }
 
   // Click + until we reach target (with 15% tolerance)
@@ -601,14 +609,15 @@ export async function adjustVariableWeight(
     // Check if we're close enough (within 5% tolerance)
     if (currentWeight >= targetKg * 0.95 && currentWeight <= targetKg * 1.05) {
       if (log) log.info(`✓ Reached ${currentWeight}kg (close enough to ${targetKg}kg)`);
-      return true;
+      return { success: true, actualWeight: currentWeight, targetWeight: targetKg };
     }
   }
 
   const finalWeight = await getCurrentWeight();
   if (log) log.info(`Final weight: ${finalWeight}kg after ${clicks} clicks`);
 
-  // Check if we got reasonably close (within 20% for final check)
-  return finalWeight >= targetKg * 0.8 && finalWeight <= targetKg * 1.2;
+  // Return actual weight achieved and whether we got within acceptable tolerance (5%)
+  const success = finalWeight >= targetKg * 0.95 && finalWeight <= targetKg * 1.05;
+  return { success, actualWeight: finalWeight, targetWeight: targetKg };
 }
 

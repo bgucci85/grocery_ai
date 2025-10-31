@@ -203,13 +203,33 @@ export async function addByUrl(
     log.info(`[rimi] ✓ Added 1 item to cart`);
     
     // Handle quantity > 1
+    let finalQuantity = qty;
     if (qty > 1) {
-      log.info(`[rimi] Setting quantity to ${qty} units...`);
-      const incremented = await incrementQuantity(page, qty);
-      if (incremented) {
-        log.info(`[rimi] ✓ Set quantity to ${qty}`);
+      // Check if this is a weighted item
+      const isWeightedItem = productName.toLowerCase().includes('kg');
+      
+      if (isWeightedItem) {
+        log.info(`[rimi] Detected weighted item, adjusting to ${qty}kg...`);
+        const result = await adjustVariableWeight(page, qty, log);
+        
+        // Use actual weight achieved for reporting
+        finalQuantity = result.actualWeight;
+        
+        if (!result.success) {
+          // Weight adjustment didn't reach target, but item is still in cart
+          const percentage = Math.round((result.actualWeight / result.targetWeight) * 100);
+          log.warn(`[rimi] ⚠️  Weight mismatch: requested ${result.targetWeight}kg, got ${result.actualWeight}kg (${percentage}% of target)`);
+        } else {
+          log.info(`[rimi] ✓ Successfully adjusted to ${finalQuantity}kg (target: ${qty}kg)`);
+        }
       } else {
-        log.warn(`[rimi] Could not set quantity; may have only 1`);
+        log.info(`[rimi] Setting quantity to ${qty} units...`);
+        const incremented = await incrementQuantity(page, qty);
+        if (incremented) {
+          log.info(`[rimi] ✓ Set quantity to ${qty}`);
+        } else {
+          log.warn(`[rimi] Could not set quantity; may have only 1`);
+        }
       }
     }
     
@@ -217,7 +237,7 @@ export async function addByUrl(
     
     return {
       productName,
-      quantityAdded: qty
+      quantityAdded: finalQuantity  // Returns actual weight for weighted items
     };
   } catch (error) {
     log.error(`[rimi] Error adding product from URL: ${error}`);
@@ -401,6 +421,7 @@ export async function addByQuery(
     await page.waitForTimeout(1500); // Wait for cart modal/selector to appear
     
     // Handle quantity/weight adjustment
+    let finalQuantity = actualQty;
     if (actualQty > 1) {
       // Check if this is a weighted item (contains "kg" in query or title)
       const isWeightedItem = 
@@ -409,9 +430,17 @@ export async function addByQuery(
       
       if (isWeightedItem) {
         log.info(`[rimi] Detected weighted item, adjusting to ${actualQty}kg...`);
-        const adjusted = await adjustVariableWeight(page, actualQty, log);
-        if (!adjusted) {
-          log.warn(`[rimi] Could not adjust weight precisely, but item is in cart`);
+        const result = await adjustVariableWeight(page, actualQty, log);
+        
+        // Use actual weight achieved for reporting
+        finalQuantity = result.actualWeight;
+        
+        if (!result.success) {
+          // Weight adjustment didn't reach target, but item is still in cart
+          const percentage = Math.round((result.actualWeight / result.targetWeight) * 100);
+          log.warn(`[rimi] ⚠️  Weight mismatch: requested ${result.targetWeight}kg, got ${result.actualWeight}kg (${percentage}% of target)`);
+        } else {
+          log.info(`[rimi] ✓ Successfully adjusted to ${finalQuantity}kg (target: ${actualQty}kg)`);
         }
       } else {
         log.info(`[rimi] Setting quantity to ${actualQty} units...`);
@@ -466,7 +495,7 @@ export async function addByQuery(
     // IMPORTANT: Return immediately to prevent any further clicks
     return {
       productName: selected.title,
-      quantityAdded: actualQty
+      quantityAdded: finalQuantity  // Returns actual weight for weighted items
     };
   } catch (error) {
     log.error(`[rimi] Error searching for "${query}": ${error}`);
