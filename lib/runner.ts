@@ -63,13 +63,25 @@ const DRIVERS: Record<Site, SiteDriver> = {
 /**
  * Main orchestration logic
  */
-export async function runJob(options: RunOptions, log: LogSink): Promise<void> {
+export interface RunJobResult {
+  judgments: any[] | null;
+  originalItems: CartItem[];
+  addedItems: AddedItem[];
+  failedItems: FailedItem[];
+}
+
+export async function runJob(options: RunOptions, log: LogSink): Promise<RunJobResult> {
   log.info("🚀 Starting Groceries Autocart...");
   
   // Validate input
   if (!options.items || options.items.length === 0) {
     log.error("No items provided");
-    return;
+    return {
+      judgments: null,
+      originalItems: [],
+      addedItems: [],
+      failedItems: []
+    };
   }
 
   // Group items by site
@@ -138,9 +150,11 @@ export async function runJob(options: RunOptions, log: LogSink): Promise<void> {
   }
 
   // Run cart verification if OpenAI is enabled
+  let judgments = null;
   if (options.useOpenAI && process.env.OPENAI_API_KEY) {
-    const judgments = await judgeCart(options.items, allAddedItems, allFailedItems, log);
-    displayJudgment(judgments, log);
+    judgments = await judgeCart(options.items, allAddedItems, allFailedItems, log);
+    // Don't display in logs anymore - will be shown in UI
+    // displayJudgment(judgments, log);
   }
 
   if (options.headful) {
@@ -148,6 +162,14 @@ export async function runJob(options: RunOptions, log: LogSink): Promise<void> {
   } else {
     log.done("\n✅ Ready for checkout");
   }
+
+  // Return judgment data for UI display
+  return {
+    judgments,
+    originalItems: options.items,
+    addedItems: allAddedItems,
+    failedItems: allFailedItems
+  };
 }
 
 /**

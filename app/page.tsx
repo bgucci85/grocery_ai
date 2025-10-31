@@ -15,6 +15,23 @@ interface LogLine {
   message: string;
 }
 
+interface JudgmentItem {
+  originalRequest: string;
+  status: "success" | "warning" | "failed";
+  productAdded: string | null;
+  quantityRequested: number;
+  quantityAdded: number | null;
+  matchScore: number;
+  notes: string[];
+}
+
+interface JudgmentData {
+  judgments: JudgmentItem[];
+  originalItems: any[];
+  addedItems: any[];
+  failedItems: any[];
+}
+
 export default function Home() {
   const [inputMode, setInputMode] = useState<"simple" | "json">("simple");
   const [barboraItems, setBarboraItems] = useState(`2 vnt apelsinai
@@ -28,6 +45,7 @@ bananai 1kg`);
   const [isRunning, setIsRunning] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [isDone, setIsDone] = useState(false);
+  const [judgmentData, setJudgmentData] = useState<JudgmentData | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new logs arrive
@@ -110,6 +128,7 @@ bananai 1kg`);
     setLogs([]);
     setIsDone(false);
     setIsRunning(true);
+    setJudgmentData(null);
 
     try {
       let items;
@@ -187,11 +206,19 @@ bananai 1kg`);
         for (const line of lines) {
           if (line.trim()) {
             try {
-              const logLine: LogLine = JSON.parse(line);
-              setLogs((prev) => [...prev, logLine]);
+              const parsed = JSON.parse(line);
+              
+              // Check if this is judgment data
+              if (parsed.type === "judgments") {
+                setJudgmentData(parsed.data);
+              } else {
+                // Regular log line
+                const logLine: LogLine = parsed;
+                setLogs((prev) => [...prev, logLine]);
 
-              if (logLine.level === "done") {
-                setIsDone(true);
+                if (logLine.level === "done") {
+                  setIsDone(true);
+                }
               }
             } catch (error) {
               console.error("Error parsing log line:", error);
@@ -405,6 +432,106 @@ bananai 1kg`);
             )}
           </div>
         </div>
+
+        {/* Cart Verification Report - Side by Side */}
+        {judgmentData && judgmentData.judgments && judgmentData.judgments.length > 0 && (
+          <div className="mt-8 bg-gray-800 rounded-lg p-6 shadow-xl">
+            <h2 className="text-2xl font-semibold mb-4 flex items-center">
+              <span className="mr-2">📊</span>
+              Cart Verification Report
+            </h2>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left: Original Shopping List */}
+              <div className="bg-gray-900 rounded-lg p-4">
+                <h3 className="text-lg font-semibold mb-3 text-blue-400">📝 Original Shopping List</h3>
+                <div className="space-y-2">
+                  {judgmentData.judgments.map((item, idx) => (
+                    <div key={idx} className="p-3 bg-gray-800 rounded border border-gray-700">
+                      <div className="text-sm text-gray-300">{item.originalRequest}</div>
+                      <div className="text-xs text-gray-500 mt-1">Quantity: {item.quantityRequested}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Right: Cart Verification Results */}
+              <div className="bg-gray-900 rounded-lg p-4">
+                <h3 className="text-lg font-semibold mb-3 text-green-400">✅ Verification Results</h3>
+                <div className="space-y-2">
+                  {judgmentData.judgments.map((item, idx) => {
+                    const getBgColor = () => {
+                      if (item.status === "success") return "bg-green-900/30 border-green-500/50";
+                      if (item.status === "warning") return "bg-yellow-900/30 border-yellow-500/50";
+                      return "bg-red-900/30 border-red-500/50";
+                    };
+
+                    const getIcon = () => {
+                      if (item.status === "success") return "✅";
+                      if (item.status === "warning") return "⚠️";
+                      return "❌";
+                    };
+
+                    const getScoreColor = () => {
+                      if (item.matchScore >= 95) return "text-green-400";
+                      if (item.matchScore >= 70) return "text-yellow-400";
+                      if (item.matchScore >= 50) return "text-orange-400";
+                      return "text-red-400";
+                    };
+
+                    return (
+                      <div key={idx} className={`p-3 rounded border ${getBgColor()}`}>
+                        <div className="flex items-start justify-between mb-2">
+                          <span className="text-lg">{getIcon()}</span>
+                          <span className={`text-sm font-bold ${getScoreColor()}`}>
+                            {item.matchScore}%
+                          </span>
+                        </div>
+                        
+                        {item.productAdded ? (
+                          <>
+                            <div className="text-sm text-gray-200 mb-1">
+                              {item.productAdded}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              Added: {item.quantityAdded} unit(s)
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-sm text-red-400">Not added</div>
+                        )}
+
+                        {item.notes && item.notes.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-gray-700">
+                            {item.notes.map((note, noteIdx) => (
+                              <div key={noteIdx} className="text-xs text-gray-400 mt-1">
+                                • {note}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Overall Accuracy */}
+            <div className="mt-4 p-4 bg-blue-900/30 rounded-lg border border-blue-500/30 text-center">
+              <div className="text-sm text-gray-400 mb-1">Overall Accuracy</div>
+              <div className="text-3xl font-bold text-blue-400">
+                {judgmentData.judgments.length > 0
+                  ? (
+                      judgmentData.judgments.reduce((sum, item) => sum + item.matchScore, 0) /
+                      judgmentData.judgments.length
+                    ).toFixed(1)
+                  : "0.0"}
+                %
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );

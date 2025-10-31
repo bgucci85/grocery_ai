@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
 
         try {
           // Run the job
-          await runJob(
+          const result = await runJob(
             {
               items: body.items,
               headful: body.headful || false,
@@ -32,6 +32,20 @@ export async function POST(request: NextRequest) {
             },
             log
           );
+
+          // Send judgment data as a special message at the end
+          if (result.judgments) {
+            const judgmentMessage = JSON.stringify({
+              type: "judgments",
+              data: {
+                judgments: result.judgments,
+                originalItems: result.originalItems,
+                addedItems: result.addedItems,
+                failedItems: result.failedItems
+              }
+            });
+            controller.enqueue(new TextEncoder().encode(judgmentMessage + "\n"));
+          }
         } catch (error) {
           log.error(`Fatal error: ${error}`);
         } finally {
