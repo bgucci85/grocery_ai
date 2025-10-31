@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { AddedItem, FailedItem, CartItem } from "../runner";
+import { CartItem as ScrapedCartItem } from "./cart-scraper";
 import { LogSink } from "./log";
 
 const openai = new OpenAI({
@@ -20,6 +21,7 @@ export async function judgeCart(
   originalItems: CartItem[],
   addedItems: AddedItem[],
   failedItems: FailedItem[],
+  actualCartItems: ScrapedCartItem[],
   log: LogSink
 ): Promise<JudgmentItem[]> {
   try {
@@ -40,21 +42,34 @@ export async function judgeCart(
       return `${index + 1}. "${identifier}" - Reason: ${item.reason}`;
     }).join('\n');
     
-    const prompt = `You are a grocery shopping cart verification assistant. Compare the original shopping list with what was actually added to the cart and what failed.
+    const actualCartList = actualCartItems.map((item, index) => {
+      return `${index + 1}. "${item.productName}" - ${item.quantity} ${item.unit}${item.price ? ` (${item.price})` : ''}`;
+    }).join('\n');
+    
+    const prompt = `You are a grocery shopping cart verification assistant. Compare what was requested with what's ACTUALLY in the cart (not just what was reported).
 
 ORIGINAL SHOPPING LIST:
 ${originalList}
 
-ITEMS SUCCESSFULLY ADDED TO CART:
+WHAT DRIVERS REPORTED THEY ADDED:
 ${addedList || '(None)'}
+
+ACTUAL CART CONTENTS (scraped from website):
+${actualCartList || '(None)'}
 
 ITEMS THAT FAILED TO ADD:
 ${failedList || '(None)'}
 
+IMPORTANT: Compare the ACTUAL CART CONTENTS with the original requests. If drivers reported adding 0.5kg but the cart only has 0.25kg, note this discrepancy!
+
 For each item in the original list, provide:
-1. A match score (0-100) indicating how well the added product matches the request
+1. A match score (0-100) based on ACTUAL cart contents vs request
 2. Status: "success", "warning", or "failed"
-3. Notes about any issues (wrong product, quantity mismatch, substitution, etc.)
+3. Notes about ANY issues including:
+   - Quantity mismatches between reported and actual
+   - Wrong product or wrong size
+   - Substitutions
+   - Anything that doesn't match the original request
 
 Return your analysis as a JSON object with an "items" array:
 {
@@ -62,23 +77,24 @@ Return your analysis as a JSON object with an "items" array:
     {
       "originalRequest": "the original request from the list",
       "status": "success" | "warning" | "failed",
-      "productAdded": "what was actually added (or null if failed)",
+      "productAdded": "what's ACTUALLY in cart (from actual cart contents)",
       "quantityRequested": number,
-      "quantityAdded": number (or null if failed),
-      "matchScore": 0-100,
-      "notes": ["list of observations/issues"]
+      "quantityAdded": number (ACTUAL quantity from cart, not reported),
+      "matchScore": 0-100 (based on actual cart vs request),
+      "notes": ["list ALL issues: quantity mismatches, wrong products, etc."]
     }
   ]
 }
 
 Guidelines:
 - matchScore should be 95-100 for exact matches
-- matchScore should be 70-94 for acceptable but not perfect matches (e.g., different brand)
-- matchScore should be 50-69 for questionable matches (wrong size, possible substitution)
+- matchScore should be 70-94 for acceptable but not perfect matches (e.g., different brand, minor qty difference)
+- matchScore should be 50-69 for questionable matches (wrong size, significant qty mismatch like 0.25kg vs 0.5kg)
 - matchScore should be 0-49 for poor matches or failures
 - Status "success" = matchScore >= 70 and no major issues
-- Status "warning" = matchScore 50-69 or quantity issues
-- Status "failed" = item not added or matchScore < 50`;
+- Status "warning" = matchScore 50-69 or quantity issues (e.g., requested 0.5kg got 0.25kg)
+- Status "failed" = item not added or matchScore < 50
+- ALWAYS note when reported quantity differs from actual cart quantity!`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",

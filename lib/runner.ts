@@ -5,6 +5,7 @@ import { LogSink } from "./utils/log";
 import * as barbora from "./drivers/barbora";
 import * as rimi from "./drivers/rimi";
 import { judgeCart, displayJudgment } from "./utils/cart-judge";
+import { scrapeBarboraCart, scrapeRimiCart, CartItem as ScrapedCartItem } from "./utils/cart-scraper";
 
 export type Site = "barbora" | "rimi";
 
@@ -105,15 +106,17 @@ export async function runJob(options: RunOptions, log: LogSink): Promise<RunJobR
 
   log.info(`Processing ${options.items.length} items across ${itemsBySite.size} site(s)`);
 
-  // Track failed and added items across all sites
+  // Track failed items, added items, and actual cart contents across all sites
   const allFailedItems: FailedItem[] = [];
   const allAddedItems: AddedItem[] = [];
+  const allActualCartItems: ScrapedCartItem[] = [];
 
   // Process each site
   for (const [site, items] of Array.from(itemsBySite.entries())) {
-    const { failedItems, addedItems } = await processSite(site, items, options, log);
+    const { failedItems, addedItems, actualCart } = await processSite(site, items, options, log);
     allFailedItems.push(...failedItems);
     allAddedItems.push(...addedItems);
+    allActualCartItems.push(...actualCart);
   }
 
   // Report summary
@@ -152,7 +155,7 @@ export async function runJob(options: RunOptions, log: LogSink): Promise<RunJobR
   // Run cart verification if OpenAI is enabled
   let judgments = null;
   if (options.useOpenAI && process.env.OPENAI_API_KEY) {
-    judgments = await judgeCart(options.items, allAddedItems, allFailedItems, log);
+    judgments = await judgeCart(options.items, allAddedItems, allFailedItems, allActualCartItems, log);
     // Don't display in logs anymore - will be shown in UI
     // displayJudgment(judgments, log);
   }
@@ -180,7 +183,7 @@ async function processSite(
   items: CartItem[],
   options: RunOptions,
   log: LogSink
-): Promise<{ failedItems: FailedItem[]; addedItems: AddedItem[] }> {
+): Promise<{ failedItems: FailedItem[]; addedItems: AddedItem[]; actualCart: ScrapedCartItem[] }> {
   let context: BrowserContext | null = null;
   const failedItems: FailedItem[] = [];
   const addedItems: AddedItem[] = [];
@@ -342,6 +345,20 @@ async function processSite(
       log.warn(`[${site}] Could not navigate to cart, but items were added`);
     }
 
+    // Scrape actual cart contents for verification
+    log.info(`\n📋 [${site}] Reading actual cart contents...`);
+    let actualCart: ScrapedCartItem[] = [];
+    try {
+      if (site === "barbora") {
+        actualCart = await scrapeBarboraCart(page, log);
+      } else if (site === "rimi") {
+        actualCart = await scrapeRimiCart(page, log);
+      }
+      log.info(`[${site}] Found ${actualCart.length} items in actual cart`);
+    } catch (error) {
+      log.warn(`[${site}] Failed to scrape cart: ${error}`);
+    }
+
     // Keep browser open in headful mode
     if (options.headful) {
       log.info(`\n🛒 [${site}] Browser window left open for you to review and checkout`);
@@ -353,14 +370,16 @@ async function processSite(
         await context.close();
       }
     }
+    
+    return { failedItems, addedItems, actualCart };
   } catch (error) {
     log.error(`Error processing ${site}: ${error}`);
     // Close on error
     if (context) {
       await context.close();
     }
+    
+    return { failedItems, addedItems, actualCart: [] };
   }
-  
-  return { failedItems, addedItems };
 }
 
