@@ -15,8 +15,34 @@ export async function scrapeBarboraCart(page: Page, log?: LogSink): Promise<Cart
   try {
     if (log) log.info("[Cart Scraper] Reading cart contents from sidebar...");
     
-    // Wait for cart to be visible
-    await page.waitForSelector('.b-cart--scrollable-blocks-wrap--cart-content', { timeout: 5000 });
+    // First, check if cart sidebar is already visible
+    const cartSidebarVisible = await page.locator('.b-cart--scrollable-blocks-wrap--cart-content').isVisible().catch(() => false);
+    
+    if (!cartSidebarVisible) {
+      if (log) log.info("[Cart Scraper] Cart sidebar not visible, trying to open it...");
+      
+      // Try to click the cart icon to open the sidebar
+      const cartIconSelectors = [
+        'button[aria-label*="Cart"]',
+        'a[href*="/cart"]',
+        '.b-header-cart',
+        'button:has-text("Cart")',
+        '[data-testid="cart-button"]'
+      ];
+      
+      for (const selector of cartIconSelectors) {
+        const button = page.locator(selector).first();
+        if (await button.isVisible().catch(() => false)) {
+          if (log) log.info(`[Cart Scraper] Clicking cart icon: ${selector}`);
+          await button.click();
+          await page.waitForTimeout(1500); // Wait for sidebar to open
+          break;
+        }
+      }
+    }
+    
+    // Wait for cart content to be visible (increased timeout)
+    await page.waitForSelector('.b-cart--scrollable-blocks-wrap--cart-content', { timeout: 10000 });
     
     // Find all cart items
     const cartItems = await page.locator('[data-testid^="cart-item-"]').all();

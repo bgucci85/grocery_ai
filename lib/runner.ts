@@ -1,4 +1,8 @@
-import { chromium, BrowserContext } from "playwright";
+import { chromium as playwrightChromium, BrowserContext } from "playwright";
+// @ts-ignore - playwright-extra doesn't have perfect types
+import { chromium } from "playwright-extra";
+// @ts-ignore - stealth plugin types
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import * as path from "path";
 import * as fs from "fs";
 import { LogSink } from "./utils/log";
@@ -6,6 +10,9 @@ import * as barbora from "./drivers/barbora";
 import * as rimi from "./drivers/rimi";
 import { judgeCart, displayJudgment } from "./utils/cart-judge";
 import { scrapeBarboraCart, scrapeRimiCart, CartItem as ScrapedCartItem } from "./utils/cart-scraper";
+
+// Apply stealth plugin to hide automation markers
+chromium.use(StealthPlugin());
 
 export type Site = "barbora" | "rimi";
 
@@ -197,16 +204,35 @@ async function processSite(
       fs.mkdirSync(userDataDir, { recursive: true });
     }
 
-    // Launch persistent context
+    // Launch persistent context with anti-detection measures
     log.info(`Launching browser for ${site}...`);
+    
+    // Randomize viewport to avoid fingerprint consistency (per blog recommendation)
+    const viewportWidth = 1280 + Math.floor(Math.random() * 200); // 1280-1480
+    const viewportHeight = 720 + Math.floor(Math.random() * 200); // 720-920
+    
     context = await chromium.launchPersistentContext(userDataDir, {
       headless: !options.headful,
-      viewport: { width: 1280, height: 720 },
+      viewport: { width: viewportWidth, height: viewportHeight }, // Randomized viewport
       acceptDownloads: false,
-      channel: undefined, // Use regular chromium
+      channel: 'chrome', // Use real Chrome instead of Chromium (more trusted)
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      locale: 'en-US',
+      timezoneId: 'Europe/Vilnius',
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--start-maximized'
+      ],
+      ignoreDefaultArgs: ['--enable-automation'],
     });
 
     const page = await context.newPage();
+    
+    // Stealth plugin handles most automation masking automatically
+    // Add human-like behavior: random mouse movements and delays
+    await page.mouse.move(Math.random() * 100, Math.random() * 100);
+    await page.waitForTimeout(500 + Math.random() * 1000);
+    
     const driver = DRIVERS[site];
 
     // Ensure logged in
@@ -331,27 +357,19 @@ async function processSite(
 
     log.info(`\n✓ Completed ${site}`);
     
-    // Navigate to cart so user can review
-    try {
-      const cartUrls: Record<Site, string> = {
-        barbora: "https://www.barbora.lt/cart",
-        rimi: "https://www.rimi.lt/e-parduotuve/cart",
-      };
-      
-      log.info(`[${site}] Opening cart for review...`);
-      await page.goto(cartUrls[site], { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2000);
-    } catch (error) {
-      log.warn(`[${site}] Could not navigate to cart, but items were added`);
-    }
-
     // Scrape actual cart contents for verification
     log.info(`\n📋 [${site}] Reading actual cart contents...`);
     let actualCart: ScrapedCartItem[] = [];
     try {
       if (site === "barbora") {
+        // Barbora has a cart sidebar, no need to navigate
+        // Just scrape from current page
         actualCart = await scrapeBarboraCart(page, log);
       } else if (site === "rimi") {
+        // Rimi needs to navigate to cart page
+        log.info(`[${site}] Navigating to cart page...`);
+        await page.goto("https://www.rimi.lt/e-parduotuve/cart", { waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(2000);
         actualCart = await scrapeRimiCart(page, log);
       }
       log.info(`[${site}] Found ${actualCart.length} items in actual cart`);

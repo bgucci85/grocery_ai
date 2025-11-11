@@ -58,6 +58,49 @@ export async function ensureLoggedIn(page: Page, log: LogSink): Promise<void> {
   log.info("[rimi] Navigating to home page...");
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   
+  // Wait a moment for initial page load
+  await page.waitForTimeout(2000);
+  
+  // Check for Cloudflare challenge
+  const cloudflareSelectors = [
+    'text=Verify you are human',
+    'text=rimi.lt needs to review the security',
+    '#challenge-form',
+    'iframe[src*="cloudflare"]',
+    '[data-ray-id]'
+  ];
+  
+  let hasCloudflare = false;
+  for (const selector of cloudflareSelectors) {
+    const count = await page.locator(selector).count();
+    if (count > 0) {
+      hasCloudflare = true;
+      break;
+    }
+  }
+  
+  if (hasCloudflare) {
+    log.warn("⚠️  [rimi] Cloudflare challenge detected!");
+    log.warn("📋 [rimi] Please solve the CAPTCHA manually in the browser window");
+    log.warn("⏳ [rimi] Waiting up to 60 seconds for you to complete the challenge...");
+    
+    // Wait for Cloudflare to disappear (page navigates away from challenge)
+    try {
+      await page.waitForFunction(() => {
+        const body = document.body.innerText.toLowerCase();
+        return !body.includes('verify you are human') && 
+               !body.includes('cloudflare') &&
+               !body.includes('security of your connection');
+      }, { timeout: 60000 });
+      
+      log.info("✅ [rimi] Cloudflare challenge solved! Continuing...");
+      await page.waitForTimeout(2000); // Let page fully load
+    } catch (error) {
+      log.error("❌ [rimi] Timeout waiting for Cloudflare challenge to be solved");
+      throw new Error("Cloudflare challenge not solved in time");
+    }
+  }
+  
   // Accept cookies if banner appears
   await acceptCookiesIfAny(page, ["Priimti", "Sutinku", "Accept", "Sutikti"]);
   
